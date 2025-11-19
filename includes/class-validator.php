@@ -59,6 +59,12 @@ class WP_SMTP_API_Validator {
             return '';
         }
 
+        // Limit subject length (RFC 2822 recommends 78 chars per line, we'll allow 998)
+        $max_length = 998;
+        if (strlen($subject) > $max_length) {
+            $subject = substr($subject, 0, $max_length);
+        }
+
         // Remove any newlines or carriage returns (header injection prevention)
         $subject = str_replace(array("\r", "\n", "%0a", "%0d"), '', $subject);
 
@@ -71,20 +77,32 @@ class WP_SMTP_API_Validator {
 
     /**
      * Sanitize email content
+     * Note: For API transmission, we only remove dangerous characters but preserve HTML
+     * The receiving API should perform its own validation/sanitization
      */
     public static function sanitize_content($content, $is_html = true) {
         if (empty($content)) {
             return '';
         }
 
-        // Remove null bytes
+        // Remove null bytes (security)
         $content = str_replace(chr(0), '', $content);
 
+        // Limit content length to prevent memory exhaustion (10MB limit)
+        $max_length = 10 * 1024 * 1024; // 10MB
+        if (strlen($content) > $max_length) {
+            error_log('WP SMTP API: Email content exceeds maximum length');
+            return substr($content, 0, $max_length);
+        }
+
         if ($is_html) {
-            // For HTML content, use wp_kses_post to allow safe HTML
-            return wp_kses_post($content);
+            // For HTML emails being sent to API, we preserve HTML but remove NULL bytes and scripts
+            // The API will handle further sanitization if needed
+            // Remove any embedded NULL bytes and dangerous scripts
+            $content = preg_replace('/<script\b[^>]*>(.*?)<\/script>/is', '', $content);
+            return $content;
         } else {
-            // For plain text, just sanitize
+            // For plain text, ensure it's clean
             return sanitize_textarea_field($content);
         }
     }
@@ -262,8 +280,16 @@ class WP_SMTP_API_Validator {
         }
 
         // JWT Token
-        if (isset($input['jwt_token'])) {
-            $sanitized['jwt_token'] = sanitize_text_field($input['jwt_token']);
+        if (isset($input['jwt_token']) && !empty($input['jwt_token'])) {
+            $token = sanitize_text_field($input['jwt_token']);
+            // Validate JWT format before accepting
+            if (self::validate_jwt_token($token)) {
+                $sanitized['jwt_token'] = $token;
+            } else {
+                // Invalid JWT format - log warning
+                error_log('WP SMTP API: Invalid JWT token format provided');
+                $sanitized['jwt_token'] = ''; // Don't save invalid tokens
+            }
         }
 
         // Timeout

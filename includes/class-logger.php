@@ -40,12 +40,21 @@ class WP_SMTP_API_Logger {
         // Ensure log directory exists
         if (!file_exists($log_dir)) {
             wp_mkdir_p($log_dir);
-            // Protect directory
+            // Protect directory with .htaccess
             file_put_contents($log_dir . '/.htaccess', 'Deny from all');
             file_put_contents($log_dir . '/index.php', '<?php // Silence is golden');
+            // Set secure permissions
+            @chmod($log_dir, 0755);
         }
 
-        $this->log_file = $log_dir . '/smtp-api-' . date('Y-m-d') . '.log';
+        // Add random suffix to log file name for additional security
+        $random_suffix = get_option('wp_smtp_api_log_suffix');
+        if (!$random_suffix) {
+            $random_suffix = wp_generate_password(8, false);
+            add_option('wp_smtp_api_log_suffix', $random_suffix, '', false);
+        }
+
+        $this->log_file = $log_dir . '/smtp-api-' . date('Y-m-d') . '-' . $random_suffix . '.log';
     }
 
     /**

@@ -93,10 +93,73 @@ class WP_SMTP_API {
         // Load text domain for translations
         load_plugin_textdomain('wp-smtp-api', false, dirname(plugin_basename(__FILE__)) . '/languages');
 
+        // Validate wp-config constants if defined
+        $this->validate_constants();
+
         // Initialize the API mailer if settings are configured
         $settings = WP_SMTP_API_Settings::instance();
         if ($settings->is_configured()) {
             WP_SMTP_API_Mailer::instance();
+        }
+    }
+
+    /**
+     * Validate wp-config constants for security
+     */
+    private function validate_constants() {
+        // Validate API endpoint constant
+        if (defined('WP_SMTP_API_ENDPOINT')) {
+            $endpoint = WP_SMTP_API_ENDPOINT;
+
+            // Must be HTTPS
+            if (strpos($endpoint, 'https://') !== 0) {
+                add_action('admin_notices', function() {
+                    echo '<div class="notice notice-error"><p>';
+                    echo esc_html__('WP SMTP API: WP_SMTP_API_ENDPOINT must use HTTPS. Current endpoint is not secure.', 'wp-smtp-api');
+                    echo '</p></div>';
+                });
+                error_log('WP SMTP API: WP_SMTP_API_ENDPOINT constant must use HTTPS');
+            }
+
+            // Validate URL format
+            if (!filter_var($endpoint, FILTER_VALIDATE_URL)) {
+                add_action('admin_notices', function() {
+                    echo '<div class="notice notice-error"><p>';
+                    echo esc_html__('WP SMTP API: WP_SMTP_API_ENDPOINT is not a valid URL.', 'wp-smtp-api');
+                    echo '</p></div>';
+                });
+                error_log('WP SMTP API: WP_SMTP_API_ENDPOINT constant is not a valid URL');
+            }
+        }
+
+        // Validate JWT token constant
+        if (defined('WP_SMTP_API_JWT_TOKEN')) {
+            $token = WP_SMTP_API_JWT_TOKEN;
+
+            // Basic JWT format validation
+            if (substr_count($token, '.') !== 2) {
+                add_action('admin_notices', function() {
+                    echo '<div class="notice notice-warning"><p>';
+                    echo esc_html__('WP SMTP API: WP_SMTP_API_JWT_TOKEN does not appear to be a valid JWT format.', 'wp-smtp-api');
+                    echo '</p></div>';
+                });
+                error_log('WP SMTP API: WP_SMTP_API_JWT_TOKEN constant does not match JWT format');
+            }
+        }
+
+        // Validate encryption key constant
+        if (defined('WP_SMTP_API_ENCRYPTION_KEY')) {
+            $key = WP_SMTP_API_ENCRYPTION_KEY;
+
+            // Warn if encryption key is too short
+            if (strlen($key) < 16) {
+                add_action('admin_notices', function() {
+                    echo '<div class="notice notice-warning"><p>';
+                    echo esc_html__('WP SMTP API: WP_SMTP_API_ENCRYPTION_KEY should be at least 16 characters for security.', 'wp-smtp-api');
+                    echo '</p></div>';
+                });
+                error_log('WP SMTP API: WP_SMTP_API_ENCRYPTION_KEY constant is too short');
+            }
         }
     }
 

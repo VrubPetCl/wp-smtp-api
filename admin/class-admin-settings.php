@@ -328,6 +328,25 @@ class WP_SMTP_API_Admin_Settings {
 
         check_admin_referer('wp_smtp_api_test_email');
 
+        // Rate limiting: Max 3 test emails per 5 minutes per user
+        $rate_limit_key = 'wp_smtp_api_test_rate_' . get_current_user_id();
+        $test_count = get_transient($rate_limit_key);
+
+        if ($test_count && $test_count >= 3) {
+            add_settings_error(
+                'wp_smtp_api_messages',
+                'wp_smtp_api_rate_limit',
+                __('Rate limit exceeded. Please wait 5 minutes before sending another test email.', 'wp-smtp-api'),
+                'error'
+            );
+            set_transient('settings_errors', get_settings_errors(), 30);
+            wp_safe_redirect(add_query_arg('settings-updated', 'true', wp_get_referer()));
+            exit;
+        }
+
+        // Increment test count
+        set_transient($rate_limit_key, ($test_count ? $test_count + 1 : 1), 5 * MINUTE_IN_SECONDS);
+
         $client = new WP_SMTP_API_Client();
         $result = $client->test_connection();
 

@@ -52,10 +52,26 @@ class WP_SMTP_API_Settings {
      */
     private function ensure_encryption_key() {
         if (!get_option($this->key_option_name)) {
-            // Generate a random encryption key
-            $key = wp_generate_password(64, true, true);
+            // Generate a cryptographically secure random encryption key (32 bytes for AES-256)
+            $key = $this->generate_encryption_key();
             add_option($this->key_option_name, $key, '', false); // Not autoloaded for security
         }
+    }
+
+    /**
+     * Generate a cryptographically secure encryption key
+     */
+    private function generate_encryption_key() {
+        $crypto_strong = false;
+        $random_bytes = openssl_random_pseudo_bytes(32, $crypto_strong);
+
+        if (!$crypto_strong) {
+            // Fallback to wp_generate_password if openssl fails
+            $random_bytes = hash('sha256', wp_generate_password(64, true, true) . wp_salt(), true);
+        }
+
+        // Return base64 encoded for storage
+        return base64_encode($random_bytes);
     }
 
     /**
@@ -64,11 +80,25 @@ class WP_SMTP_API_Settings {
     private function get_encryption_key() {
         // Check if key is defined in wp-config.php (most secure)
         if (defined('WP_SMTP_API_ENCRYPTION_KEY')) {
-            return WP_SMTP_API_ENCRYPTION_KEY;
+            return $this->derive_key(WP_SMTP_API_ENCRYPTION_KEY);
         }
 
         // Fall back to database key
-        return get_option($this->key_option_name);
+        $stored_key = get_option($this->key_option_name);
+        if ($stored_key) {
+            return base64_decode($stored_key);
+        }
+
+        // This should never happen, but fallback
+        return $this->derive_key(wp_salt());
+    }
+
+    /**
+     * Derive a proper 32-byte key for AES-256
+     */
+    private function derive_key($input) {
+        // Use PBKDF2 to derive a proper 32-byte key
+        return hash_pbkdf2('sha256', $input, wp_salt(), 10000, 32, true);
     }
 
     /**
@@ -80,11 +110,26 @@ class WP_SMTP_API_Settings {
         }
 
         $key = $this->get_encryption_key();
-        $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length('aes-256-cbc'));
-        $encrypted = openssl_encrypt($data, 'aes-256-cbc', $key, 0, $iv);
 
-        // Combine IV and encrypted data
-        return base64_encode($iv . '::' . $encrypted);
+        // Generate IV with crypto strength check
+        $crypto_strong = false;
+        $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length('aes-256-cbc'), $crypto_strong);
+
+        if (!$crypto_strong) {
+            // Log warning if IV generation is not cryptographically strong
+            error_log('WP SMTP API: Warning - IV generation not cryptographically strong');
+        }
+
+        $encrypted = openssl_encrypt($data, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+
+        if ($encrypted === false) {
+            error_log('WP SMTP API: Encryption failed');
+            return '';
+        }
+
+        // Combine IV and encrypted data with HMAC for integrity
+        $hmac = hash_hmac('sha256', $encrypted, $key, true);
+        return base64_encode($iv . $hmac . $encrypted);
     }
 
     /**
@@ -96,19 +141,44 @@ class WP_SMTP_API_Settings {
         }
 
         $key = $this->get_encryption_key();
-        $decoded = base64_decode($data);
+        $decoded = base64_decode($data, true);
 
         if ($decoded === false) {
             return '';
         }
 
-        $parts = explode('::', $decoded, 2);
-        if (count($parts) !== 2) {
-            return $data; // Return as-is if not encrypted (backward compatibility)
+        // New format with HMAC (IV + HMAC + encrypted data)
+        $iv_length = openssl_cipher_iv_length('aes-256-cbc');
+        $hmac_length = 32; // SHA-256 produces 32 bytes
+
+        if (strlen($decoded) > $iv_length + $hmac_length) {
+            $iv = substr($decoded, 0, $iv_length);
+            $hmac = substr($decoded, $iv_length, $hmac_length);
+            $encrypted = substr($decoded, $iv_length + $hmac_length);
+
+            // Verify HMAC for integrity
+            $calculated_hmac = hash_hmac('sha256', $encrypted, $key, true);
+            if (hash_equals($calculated_hmac, $hmac)) {
+                $decrypted = openssl_decrypt($encrypted, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
+                if ($decrypted !== false) {
+                    return $decrypted;
+                }
+            }
         }
 
-        list($iv, $encrypted) = $parts;
-        return openssl_decrypt($encrypted, 'aes-256-cbc', $key, 0, $iv);
+        // Legacy format support (old ::  delimiter format)
+        $parts = explode('::', $decoded, 2);
+        if (count($parts) === 2) {
+            list($iv, $encrypted) = $parts;
+            $decrypted = openssl_decrypt($encrypted, 'aes-256-cbc', $key, 0, $iv);
+            if ($decrypted !== false) {
+                return $decrypted;
+            }
+        }
+
+        // If all decryption attempts fail, return empty string
+        error_log('WP SMTP API: Decryption failed for stored data');
+        return '';
     }
 
     /**

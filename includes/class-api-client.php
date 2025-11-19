@@ -133,6 +133,12 @@ class WP_SMTP_API_Client {
      * Make HTTP request to API
      */
     private function make_request($endpoint, $token, $payload) {
+        // Encode payload
+        $json_payload = wp_json_encode($payload);
+
+        // Generate HMAC signature for payload integrity
+        $signature = hash_hmac('sha256', $json_payload, $token);
+
         // Prepare request arguments
         $args = array(
             'method' => 'POST',
@@ -141,9 +147,11 @@ class WP_SMTP_API_Client {
             'headers' => array(
                 'Content-Type' => 'application/json',
                 'Authorization' => 'Bearer ' . $token,
+                'X-WP-SMTP-Signature' => $signature,
+                'X-WP-SMTP-Timestamp' => (string) $payload['timestamp'],
                 'User-Agent' => 'WordPress/' . get_bloginfo('version') . '; WP-SMTP-API/' . WP_SMTP_API_VERSION,
             ),
-            'body' => wp_json_encode($payload),
+            'body' => $json_payload,
         );
 
         // Make request using WordPress HTTP API
@@ -163,6 +171,13 @@ class WP_SMTP_API_Client {
 
             $this->logger->error('API request failed', array(
                 'error' => $error_message,
+            ));
+
+            // Store last error
+            $this->set_last_error(array(
+                'message' => 'API request failed: ' . $error_message,
+                'code' => $response->get_error_code(),
+                'time' => time(),
             ));
 
             return array(
@@ -204,6 +219,13 @@ class WP_SMTP_API_Client {
             'error_message' => $error_message,
         ));
 
+        // Store last error for admin display
+        $this->set_last_error(array(
+            'message' => $error_message,
+            'code' => $response_code,
+            'time' => time(),
+        ));
+
         return array(
             'success' => false,
             'message' => $error_message,
@@ -215,15 +237,20 @@ class WP_SMTP_API_Client {
      * Parse error message from response
      */
     private function parse_error_message($body, $status_code) {
-        // Try to decode JSON response
-        $decoded = json_decode($body, true);
+        // Try to decode JSON response (with depth limit for security)
+        $decoded = json_decode($body, true, 32);
 
+        // Sanitize and limit error message length
         if ($decoded && isset($decoded['message'])) {
-            return 'API Error (' . $status_code . '): ' . $decoded['message'];
+            $message = sanitize_text_field($decoded['message']);
+            $message = substr($message, 0, 500); // Limit to 500 chars
+            return 'API Error (' . $status_code . '): ' . $message;
         }
 
         if ($decoded && isset($decoded['error'])) {
-            return 'API Error (' . $status_code . '): ' . $decoded['error'];
+            $error = sanitize_text_field($decoded['error']);
+            $error = substr($error, 0, 500); // Limit to 500 chars
+            return 'API Error (' . $status_code . '): ' . $error;
         }
 
         // Generic error messages based on status code
