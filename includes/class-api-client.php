@@ -91,25 +91,35 @@ class WP_SMTP_API_Client {
             'timestamp' => time(),
         );
 
-        // Optional fields
+        // Optional fields - use from_email for FastAPI compatibility
         if (!empty($email_data['from'])) {
-            $payload['from'] = $email_data['from'];
+            $payload['from_email'] = $email_data['from'];
         }
 
         if (!empty($email_data['from_name'])) {
             $payload['from_name'] = $email_data['from_name'];
         }
 
-        if (!empty($email_data['headers'])) {
-            $payload['headers'] = $email_data['headers'];
-        }
-
         if (!empty($email_data['reply_to'])) {
             $payload['reply_to'] = $email_data['reply_to'];
         }
 
-        // Add content type indicator
+        // Add CC and BCC if present
+        if (!empty($email_data['cc'])) {
+            $payload['cc'] = is_array($email_data['cc']) ? $email_data['cc'] : array($email_data['cc']);
+        }
+
+        if (!empty($email_data['bcc'])) {
+            $payload['bcc'] = is_array($email_data['bcc']) ? $email_data['bcc'] : array($email_data['bcc']);
+        }
+
+        // Add content type indicator (FastAPI expects "text/html" or "text/plain")
         $payload['content_type'] = !empty($email_data['is_html']) ? 'text/html' : 'text/plain';
+
+        // Add attachments if present (FastAPI format)
+        if (!empty($email_data['attachments'])) {
+            $payload['attachments'] = $this->format_attachments($email_data['attachments']);
+        }
 
         return $payload;
     }
@@ -136,10 +146,7 @@ class WP_SMTP_API_Client {
         // Encode payload
         $json_payload = wp_json_encode($payload);
 
-        // Generate HMAC signature for payload integrity
-        $signature = hash_hmac('sha256', $json_payload, $token);
-
-        // Prepare request arguments
+        // Prepare request arguments (FastAPI expects standard Bearer token auth)
         $args = array(
             'method' => 'POST',
             'timeout' => $this->settings->get('timeout', 30),
@@ -147,8 +154,6 @@ class WP_SMTP_API_Client {
             'headers' => array(
                 'Content-Type' => 'application/json',
                 'Authorization' => 'Bearer ' . $token,
-                'X-WP-SMTP-Signature' => $signature,
-                'X-WP-SMTP-Timestamp' => (string) $payload['timestamp'],
                 'User-Agent' => 'WordPress/' . get_bloginfo('version') . '; WP-SMTP-API/' . WP_SMTP_API_VERSION,
             ),
             'body' => $json_payload,
@@ -159,6 +164,65 @@ class WP_SMTP_API_Client {
 
         // Handle response
         return $this->handle_response($response);
+    }
+
+    /**
+     * Format attachments for FastAPI
+     * FastAPI expects: {filename, content (base64), content_type}
+     */
+    private function format_attachments($attachments) {
+        if (empty($attachments) || !is_array($attachments)) {
+            return array();
+        }
+
+        $formatted = array();
+
+        foreach ($attachments as $attachment) {
+            // If it's a file path, read and encode it
+            if (is_string($attachment) && file_exists($attachment)) {
+                $file_content = file_get_contents($attachment);
+                if ($file_content !== false) {
+                    $formatted[] = array(
+                        'filename' => basename($attachment),
+                        'content' => base64_encode($file_content),
+                        'content_type' => $this->get_mime_type($attachment),
+                    );
+                }
+            }
+            // If it's already an array with content, format it
+            elseif (is_array($attachment) && isset($attachment['content'])) {
+                $formatted[] = array(
+                    'filename' => isset($attachment['filename']) ? $attachment['filename'] : 'attachment',
+                    'content' => isset($attachment['encoded']) && $attachment['encoded']
+                        ? $attachment['content']
+                        : base64_encode($attachment['content']),
+                    'content_type' => isset($attachment['type']) ? $attachment['type'] : 'application/octet-stream',
+                );
+            }
+        }
+
+        return $formatted;
+    }
+
+    /**
+     * Get MIME type for a file
+     */
+    private function get_mime_type($file) {
+        // Use WordPress function if available
+        if (function_exists('wp_check_filetype')) {
+            $filetype = wp_check_filetype($file);
+            if (!empty($filetype['type'])) {
+                return $filetype['type'];
+            }
+        }
+
+        // Fallback to PHP function
+        if (function_exists('mime_content_type')) {
+            return mime_content_type($file);
+        }
+
+        // Default fallback
+        return 'application/octet-stream';
     }
 
     /**

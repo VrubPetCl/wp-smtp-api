@@ -94,6 +94,44 @@ define('WP_SMTP_API_ENCRYPTION_KEY', 'your-custom-encryption-key-here');
 - Version control exclusion (via .gitignore)
 - Maximum security
 
+## FastAPI SMTP Proxy Integration
+
+This plugin is designed to work seamlessly with the [FastAPI SMTP Proxy](https://github.com/VrubPetCl/fastapi-smtp-proxy), a high-performance, multi-tenant SMTP relay service.
+
+### Quick Setup with FastAPI SMTP Proxy
+
+1. **Deploy FastAPI SMTP Proxy** (see its README for details)
+2. **Create a Client** in the proxy:
+   ```bash
+   python manage.py create-client
+   ```
+3. **Generate API Key**:
+   ```bash
+   python manage.py create-api-key
+   ```
+4. **Configure WordPress Plugin**:
+   - API Endpoint: `https://your-proxy-domain.com/api/send`
+   - JWT Token: Copy the token from step 3
+
+### Features Supported
+
+- ✅ **JWT Authentication**: Secure Bearer token authentication
+- ✅ **HTML & Plain Text**: Automatic content-type detection
+- ✅ **Attachments**: Base64-encoded file attachments
+- ✅ **Multiple Recipients**: TO, CC, and BCC support
+- ✅ **Custom Headers**: Reply-To and other email headers
+- ✅ **Analytics**: Email tracking and delivery statistics (on proxy side)
+- ✅ **Multi-tenant**: Each WordPress site can have its own SMTP configuration
+
+### Why FastAPI SMTP Proxy?
+
+- **Centralized Management**: Manage SMTP credentials for multiple WordPress sites in one place
+- **Better Deliverability**: Use professional SMTP services (SendGrid, Mailgun, etc.)
+- **Analytics & Logging**: Track email delivery, failures, and performance
+- **Security**: WordPress never stores SMTP credentials
+- **Scalability**: Handle high email volumes with async processing
+- **Multi-SMTP**: Different WordPress sites can use different SMTP providers
+
 ## API Requirements
 
 ### Endpoint Specifications
@@ -109,19 +147,27 @@ Your receiving API endpoint must:
 
 ### Request Format
 
-The plugin sends JSON POST requests with the following structure:
+The plugin sends JSON POST requests compatible with FastAPI SMTP Proxy:
 
 ```json
 {
   "to": ["recipient@example.com"],
   "subject": "Email Subject",
   "content": "Email body content (HTML or plain text)",
-  "from": "sender@example.com",
+  "from_email": "sender@example.com",
   "from_name": "Sender Name",
   "timestamp": 1234567890,
   "content_type": "text/html",
-  "headers": ["Reply-To: reply@example.com"],
-  "reply_to": "reply@example.com"
+  "reply_to": "reply@example.com",
+  "cc": ["cc@example.com"],
+  "bcc": ["bcc@example.com"],
+  "attachments": [
+    {
+      "filename": "document.pdf",
+      "content": "base64_encoded_content",
+      "content_type": "application/pdf"
+    }
+  ]
 }
 ```
 
@@ -131,15 +177,25 @@ The plugin sends JSON POST requests with the following structure:
 |-------|------|----------|-------------|
 | `to` | array | Yes | Array of recipient email addresses |
 | `subject` | string | Yes | Email subject line (sanitized) |
-| `content` | string | Yes | Email body content |
-| `from` | string | No | Sender email address |
+| `content` | string | Yes | Email body content (HTML or plain text) |
+| `from_email` | string | No | Sender email address |
 | `from_name` | string | No | Sender display name |
-| `timestamp` | integer | Yes | Unix timestamp (for replay attack prevention) |
-| `content_type` | string | Yes | Either "text/html" or "text/plain" |
-| `headers` | array | No | Additional email headers (validated) |
+| `timestamp` | integer | Yes | Unix timestamp (for request validation) |
+| `content_type` | string | No | Either "text/html" or "text/plain" (default: "text/plain") |
 | `reply_to` | string | No | Reply-To email address |
-| `cc` | array | No | CC recipients |
-| `bcc` | array | No | BCC recipients |
+| `cc` | array | No | Array of CC recipient email addresses |
+| `bcc` | array | No | Array of BCC recipient email addresses |
+| `attachments` | array | No | Array of attachment objects (see below) |
+
+#### Attachment Format
+
+Each attachment in the `attachments` array should have:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `filename` | string | Yes | Name of the attached file |
+| `content` | string | Yes | Base64-encoded file content |
+| `content_type` | string | No | MIME type (e.g., "application/pdf", "image/png") |
 
 ### Response Format
 
@@ -147,7 +203,8 @@ The plugin sends JSON POST requests with the following structure:
 ```json
 {
   "success": true,
-  "message": "Email sent successfully"
+  "message": "Email sent successfully",
+  "email_id": "123"
 }
 ```
 
@@ -155,10 +212,12 @@ The plugin sends JSON POST requests with the following structure:
 ```json
 {
   "success": false,
-  "error": "Error description",
+  "error": "Detailed error description",
   "message": "User-friendly error message"
 }
 ```
+
+The `email_id` in the success response can be used to track the email in the FastAPI SMTP Proxy's analytics system.
 
 ## Usage
 
